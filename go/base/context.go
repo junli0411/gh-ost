@@ -28,23 +28,23 @@ type RowsEstimateMethod string
 
 const (
 	TableStatusRowsEstimate RowsEstimateMethod = "TableStatusRowsEstimate"
-	ExplainRowsEstimate                        = "ExplainRowsEstimate"
-	CountRowsEstimate                          = "CountRowsEstimate"
+	ExplainRowsEstimate     RowsEstimateMethod = "ExplainRowsEstimate"
+	CountRowsEstimate       RowsEstimateMethod = "CountRowsEstimate"
 )
 
 type CutOver int
 
 const (
-	CutOverAtomic  CutOver = iota
-	CutOverTwoStep         = iota
+	CutOverAtomic CutOver = iota
+	CutOverTwoStep
 )
 
 type ThrottleReasonHint string
 
 const (
 	NoThrottleReasonHint                 ThrottleReasonHint = "NoThrottleReasonHint"
-	UserCommandThrottleReasonHint                           = "UserCommandThrottleReasonHint"
-	LeavingHibernationThrottleReasonHint                    = "LeavingHibernationThrottleReasonHint"
+	UserCommandThrottleReasonHint        ThrottleReasonHint = "UserCommandThrottleReasonHint"
+	LeavingHibernationThrottleReasonHint ThrottleReasonHint = "LeavingHibernationThrottleReasonHint"
 )
 
 const (
@@ -86,18 +86,25 @@ type MigrationContext struct {
 	SwitchToRowBinlogFormat  bool
 	AssumeRBR                bool
 	SkipForeignKeyChecks     bool
+	SkipStrictMode           bool
 	NullableUniqueKeyAllowed bool
 	ApproveRenamedColumns    bool
 	SkipRenamedColumns       bool
 	IsTungsten               bool
 	DiscardForeignKeys       bool
 	AliyunRDS                bool
+	GoogleCloudPlatform      bool
 
 	config            ContextConfig
 	configMutex       *sync.Mutex
 	ConfigFile        string
 	CliUser           string
 	CliPassword       string
+	UseTLS            bool
+	TLSAllowInsecure  bool
+	TLSCACertificate  string
+	TLSCertificate    string
+	TLSKey            string
 	CliMasterUser     string
 	CliMasterPassword string
 
@@ -122,9 +129,12 @@ type MigrationContext struct {
 	CutOverExponentialBackoff           bool
 	ExponentialBackoffMaxInterval       int64
 	ForceNamedCutOverCommand            bool
+	ForceNamedPanicCommand              bool
 	PanicFlagFile                       string
 	HooksPath                           string
 	HooksHintMessage                    string
+	HooksHintOwner                      string
+	HooksHintToken                      string
 
 	DropServeSocket bool
 	ServeSocketFile string
@@ -186,8 +196,10 @@ type MigrationContext struct {
 
 	OriginalTableColumnsOnApplier    *sql.ColumnList
 	OriginalTableColumns             *sql.ColumnList
+	OriginalTableVirtualColumns      *sql.ColumnList
 	OriginalTableUniqueKeys          [](*sql.UniqueKey)
 	GhostTableColumns                *sql.ColumnList
+	GhostTableVirtualColumns         *sql.ColumnList
 	GhostTableUniqueKeys             [](*sql.UniqueKey)
 	UniqueKey                        *sql.UniqueKey
 	SharedColumns                    *sql.ColumnList
@@ -690,6 +702,13 @@ func (this *MigrationContext) ApplyCredentials() {
 		// Override
 		this.InspectorConnectionConfig.Password = this.CliPassword
 	}
+}
+
+func (this *MigrationContext) SetupTLS() error {
+	if this.UseTLS {
+		return this.InspectorConnectionConfig.UseTLS(this.TLSCACertificate, this.TLSCertificate, this.TLSKey, this.TLSAllowInsecure)
+	}
+	return nil
 }
 
 // ReadConfigFile attempts to read the config file, if it exists

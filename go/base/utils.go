@@ -40,10 +40,9 @@ func FileExists(fileName string) bool {
 func TouchFile(fileName string) error {
 	f, err := os.OpenFile(fileName, os.O_APPEND|os.O_CREATE, 0755)
 	if err != nil {
-		return (err)
+		return err
 	}
-	defer f.Close()
-	return nil
+	return f.Close()
 }
 
 // StringContainsAll returns true if `s` contains all non empty given `substrings`
@@ -76,7 +75,8 @@ func ValidateConnection(db *gosql.DB, connectionConfig *mysql.ConnectionConfig, 
 		// swallow this error. not all servers support extra_port
 	}
 	// AliyunRDS set users port to "NULL", replace it by gh-ost param
-	if migrationContext.AliyunRDS {
+	// GCP set users port to "NULL", replace it by gh-ost param
+	if migrationContext.AliyunRDS || migrationContext.GoogleCloudPlatform {
 		port = connectionConfig.Key.Port
 	} else {
 		portQuery := `select @@global.port`

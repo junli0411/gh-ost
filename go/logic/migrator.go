@@ -78,7 +78,7 @@ type Migrator struct {
 
 	rowCopyCompleteFlag int64
 	// copyRowsQueue should not be buffered; if buffered some non-damaging but
-	//  excessive work happens at the end of the iteration as new copy-jobs arrive befroe realizing the copy is complete
+	//  excessive work happens at the end of the iteration as new copy-jobs arrive before realizing the copy is complete
 	copyRowsQueue    chan tableWriteFunc
 	applyEventsQueue chan *applyEventStruct
 
@@ -255,7 +255,11 @@ func (this *Migrator) listenOnPanicAbort() {
 // validateStatement validates the `alter` statement meets criteria.
 // At this time this means:
 // - column renames are approved
+// - no table rename allowed
 func (this *Migrator) validateStatement() (err error) {
+	if this.parser.IsRenameTable() {
+		return fmt.Errorf("ALTER statement seems to RENAME the table. This is not supported, and you should run your RENAME outside gh-ost.")
+	}
 	if this.parser.HasNonTrivialRenames() && !this.migrationContext.SkipRenamedColumns {
 		this.migrationContext.ColumnRenameMap = this.parser.GetNonTrivialRenames()
 		if !this.migrationContext.ApproveRenamedColumns {
@@ -1083,24 +1087,33 @@ func (this *Migrator) iterateChunks() error {
 		log.Debugf("No rows found in table. Rowcopy will be implicitly empty")
 		return terminateRowIteration(nil)
 	}
+
+	var hasNoFurtherRangeFlag int64
 	// Iterate per chunk:
 	for {
-		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+		if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
 			// Done
 			// There's another such check down the line
 			return nil
 		}
 		copyRowsFunc := func() error {
-			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 {
+			if atomic.LoadInt64(&this.rowCopyCompleteFlag) == 1 || atomic.LoadInt64(&hasNoFurtherRangeFlag) == 1 {
 				// Done.
 				// There's another such check down the line
 				return nil
 			}
-			hasFurtherRange, err := this.applier.CalculateNextIterationRangeEndValues()
-			if err != nil {
+
+			// When hasFurtherRange is false, original table might be write locked and CalculateNextIterationRangeEndValues would hangs forever
+
+			hasFurtherRange := false
+			if err := this.retryOperation(func() (e error) {
+				hasFurtherRange, e = this.applier.CalculateNextIterationRangeEndValues()
+				return e
+			}); err != nil {
 				return terminateRowIteration(err)
 			}
 			if !hasFurtherRange {
+				atomic.StoreInt64(&hasNoFurtherRangeFlag, 1)
 				return terminateRowIteration(nil)
 			}
 			// Copy task:
@@ -1118,7 +1131,7 @@ func (this *Migrator) iterateChunks() error {
 				}
 				_, rowsAffected, _, err := this.applier.ApplyIterationInsertQuery()
 				if err != nil {
-					return terminateRowIteration(err)
+					return err // wrapping call will retry
 				}
 				atomic.AddInt64(&this.migrationContext.TotalRowsCopied, rowsAffected)
 				atomic.AddInt64(&this.migrationContext.Iteration, 1)
